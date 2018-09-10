@@ -19,13 +19,16 @@ export PATH=$PATH:/usr/local/bin/:/usr/bin
 #
 
 usage() {
-    echo -e "\nUsage: $0 [-d <days>] [-t <label_name>] [-i <instance_name>] [-i <instance_zone>]" 1>&2
+    echo -e "\nUsage: $0 [-n] [-d <days>] [-t <label_name>] [-i <instance_name>] [-i <instance_zone>]" 1>&2
     echo -e "\nOptions:\n"
     echo -e "    -d    Number of days to keep snapshots.  Snapshots older than this number deleted."
     echo -e "          Default if not set: 7 [OPTIONAL]"
     echo -e "    -t    Only back up disks that have this specified label with value set to 'true'."
     echo -e "    -i    Instance name to create backups for. If empty, makes backup for the calling"
     echo -e "          host."
+    echo -e "    -n    Exclude Instance ID from snapshot names.  Default format follows:"
+    echo -e "             [device_name]-[instance_id]-[timestamp]"
+    echo -e "          Useful when long instance names are included in the v-disk name."
     echo -e "    -z    Instance zone. If empty, uses the zone of the calling host."
     echo -e "\n"
     exit 1
@@ -38,7 +41,7 @@ usage() {
 
 setScriptOptions()
 {
-    while getopts ":d:t:i:z:" o; do
+    while getopts ":d:t:i:nz:" o; do
         case "${o}" in
             d)
                 opt_d=${OPTARG}
@@ -48,6 +51,9 @@ setScriptOptions()
                 ;;
             i)
                 opt_i=${OPTARG}
+                ;;
+            n)
+                opt_n='TOGGLED'
                 ;;
             z)
                 opt_z=${OPTARG}
@@ -75,6 +81,13 @@ setScriptOptions()
         OPT_INSTANCE_NAME=$opt_i
     else
         OPT_INSTANCE_NAME=""
+    fi
+
+    # Negate this for cleaner code later
+    if [[ -n $opt_n ]];then
+        OPT_USE_INSTANCE_ID=false
+    else
+        OPT_USE_INSTANCE_ID=true
     fi
 
     if [[ -n $opt_z ]];then
@@ -152,17 +165,22 @@ getDeviceList()
 
 createSnapshotName()
 {
-    # create snapshot name
-    local name="gcs-$1-$2-$3"
 
     # google compute snapshot name cannot be longer than 62 characters
     local name_max_len=62
 
+    if [ $OPT_USE_INSTANCE_ID == true ]; then
+        # create snapshot name with instance ID ($2) included
+        local name="gcs-$1-$2-$3"
+	# Use this later to calculate max length for the snapshot name
+        local req_chars="gcs--$2-$3"
+    else
+        local name="gcs-$1-$3"
+        local req_chars="gcs--$3"
+    fi
+    
     # check if snapshot name is longer than max length
     if [ ${#name} -ge ${name_max_len} ]; then
-
-        # work out how many characters we require - prefix + device id + timestamp
-        local req_chars="gcs--$2-$3"
 
         # work out how many characters that leaves us for the device name
         local device_name_len=`expr ${name_max_len} - ${#req_chars}`
@@ -171,8 +189,12 @@ createSnapshotName()
         local device_name=${1:0:device_name_len}
 
         # create new (acceptable) snapshot name
-        name="gcs-${device_name}-$2-$3" ;
+	if [ $OPT_USE_INSTANCE_ID == true ]; then
+             name="gcs-${device_name}-$2-$3" ;
+        else
+             name="gcs-${device_name}-$3" ;
 
+    	fi
     fi
 
     echo -e ${name}
